@@ -1,4 +1,4 @@
-//! 页：app 或 agent 交给系统的一整屏（ADR 0009）。
+//! 页：app 或 agent 交给系统的一整屏。
 //! 页是一棵界面树：数据，不是像素。系统照着画；agent 读的也是它。
 //! 颜色和字号只能选主题里有的；要任意的样子，以后用画布。
 
@@ -146,7 +146,7 @@ pub enum Node {
     Fill,
 }
 
-/// 图标的名字。图标是系统画的，一种线条风格；app 只能选名字（ADR 0017 第 3 条）。
+/// 图标的名字。图标是系统画的，一种线条风格；app 只能选名字。
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Icon {

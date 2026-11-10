@@ -281,7 +281,7 @@ impl ToolSpec {
     }
 }
 
-/// 所在地：设备放在哪（docs/adr/0016）。设备设置里存一份，声明了 `location` 的 app 用 `host::location()` 拿。
+/// 所在地：设备放在哪。设备设置里存一份，声明了 `location` 的 app 用 `host::location()` 拿。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Place {
     /// 地名：杭州。

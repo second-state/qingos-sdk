@@ -1,4 +1,4 @@
-//! 整屏页的四样能力（ADR 0030）：逐帧画面、按键状态、音调，加上把画面放大到屏上。
+//! 整屏页的四样能力：逐帧画面、按键状态、音调，加上把画面放大到屏上。
 //!
 //! 设备和开发机上的 `vibegame` 命令行用这同一份代码。app 这头的导入函数（`qing` 模块里）：
 //! - `frame(pixels, palette) -> i32`：交一帧。`pixels` 是 240×160 个字节，一个字节指向调色板的一格；
@@ -9,7 +9,7 @@
 //! - `tone_wav(ptr, len) -> i32`：在第五个声道放一小段 WAV（16 位 PCM，最长 2 秒）。0 是收了，-1 是不是 WAV 或太长。
 //!
 //! 系统这边的状态很少：最新的一帧、按着的键、合成器里在响的。这些都不用存：
-//! 随时存档只存 wasm 内存，读档时停掉声音（ADR 0030 第 20 条）。
+//! 随时存档只存 wasm 内存，读档时停掉声音。
 
 use std::sync::{Arc, Mutex};
 use wasmtime::{Caller, Linker};
@@ -98,7 +98,7 @@ impl Frame {
         out
     }
 
-    /// 画到一块 `dw`×`dh` 的屏上（每个点 0x00RRGGBB）：取最大的整数倍，放在中间，四周黑边（ADR 0030 第 6 条）。
+    /// 画到一块 `dw`×`dh` 的屏上（每个点 0x00RRGGBB）：取最大的整数倍，放在中间，四周黑边。
     pub fn blit(&self, dst: &mut [u32], dw: usize, dh: usize) {
         let (k, x0, y0) = fit(dw, dh);
         dst.iter_mut().for_each(|p| *p = 0);
@@ -136,7 +136,7 @@ pub struct Tone {
     pub volume: u32,
 }
 
-/// 短录音最长几秒。长的走 `sound`（ADR 0027）。
+/// 短录音最长几秒。长的走 `sound`。
 pub const WAV_MAX_SECS: f32 = 2.0;
 
 /// 合成器：五个声道，混成一路单声道。系统按自己的采样率要样本。
@@ -299,7 +299,7 @@ fn parse_wav(b: &[u8]) -> Option<(Vec<i16>, u32)> {
 /// 一个 app 的整屏状态：app 的导入函数往里写，系统从里读。
 pub struct Full {
     state: Mutex<State>,
-    /// 停着：不在前台，或者系统层叠在上面。停着时定频的线程不调它（ADR 0030 第 5 条）。
+    /// 停着：不在前台，或者系统层叠在上面。停着时定频的线程不调它。
     paused: std::sync::atomic::AtomicBool,
 }
 

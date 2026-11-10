@@ -18,7 +18,7 @@
 //!
 //! 和运行时之间的约定（ABI）在 `docs/APP.md`「和运行时的约定」一节：模块导出 `qing_alloc / qing_free / qing_call / qinit`，
 //! 导入 `qing.log / push / data_read / data_write / data_list / data_delete / now / tz_offset / http / http_start / setting / name / after`。
-//! 整屏页的 `frame / buttons / tone / tone_wav` 在 [`full`] 里（ADR 0030）。
+//! 整屏页的 `frame / buttons / tone / tone_wav` 在 [`full`] 里。
 //! 来回都是 JSON 字节。
 
 pub mod full;
@@ -64,7 +64,7 @@ pub enum Event {
     Http { id: u64, tag: String, result: Result<host::Response, String> },
     /// `host::record_start` 录的那段完了：成功是整段 WAV 的字节（16 kHz、单声道、16 位），不成是为什么（包括「不发了」）。
     Recorded { id: u64, tag: String, result: Result<Vec<u8>, String> },
-    /// 通话（docs/adr/0019）：`host::call_start` 打的那通，或 `host::call_listen` 那条连接（`id` 是 0）上来的。
+    /// 通话：`host::call_start` 打的那通，或 `host::call_listen` 那条连接（`id` 是 0）上来的。
     Call { id: u64, state: CallState },
     /// 有人走近（true）/ 走开。
     Near { on: bool },
@@ -72,9 +72,9 @@ pub enum Event {
     Mute { on: bool },
     /// 外设报的事。
     Notice { source: String, text: String },
-    /// 人要全部停下（清单要了 mcu 的 app 不用订阅也收到，docs/adr/0021）。要动的东西马上停。
+    /// 人要全部停下（清单要了 mcu 的 app 不用订阅也收到）。要动的东西马上停。
     Halt,
-    /// 人在用摇杆开你（清单写了 `stick`，docs/adr/0021「人直接控制」）：左 x、左 y、右 x、右 y，-1 到 1，右和上是正。
+    /// 人在用摇杆开你（清单写了 `stick`）：左 x、左 y、右 x、右 y，-1 到 1，右和上是正。
     /// 一秒十次左右。四个都是 0 是松开了。等不到下一个就当松开了：手机可能断了网。
     Stick { axes: [f32; 4] },
     /// 不认识的，原样给你。
@@ -162,7 +162,7 @@ impl App {
     pub fn on(&mut self, f: impl Fn(Event) + Send + 'static) {
         self.on_event = Some(Box::new(move |v| f(Event::parse(v))));
     }
-    /// 清单写了 `rate_hz`：系统按这个频率调 `f`（docs/adr/0021）。一次要在一个周期里算完，不能等。
+    /// 清单写了 `rate_hz`：系统按这个频率调 `f`。一次要在一个周期里算完，不能等。
     pub fn every(&mut self, f: impl Fn() + Send + 'static) {
         self.on_tick = Some(Box::new(f));
     }
@@ -362,7 +362,7 @@ pub mod host {
         }
     }
 
-    /// 放一段短声音（ADR 0027）：WAV 的字节，最长 30 秒。不进卡流，不攒；静音、全部停下时不放。
+    /// 放一段短声音：WAV 的字节，最长 30 秒。不进卡流，不攒；静音、全部停下时不放。
     /// 合成是 app 的事。不是 WAV、太长的系统丢掉，回 false。
     pub fn sound(wav: &[u8]) -> bool {
         #[cfg(target_arch = "wasm32")]
@@ -386,7 +386,7 @@ pub mod host {
         eprintln!("[wasm-app] 停声音");
     }
 
-    /// 交一页（ADR 0009）：一整屏的界面树，系统画。同一个 ref 的新页顶掉旧的；
+    /// 交一页：一整屏的界面树，系统画。同一个 ref 的新页顶掉旧的；
     /// 人正看着这一页就立刻换。版面上指向这个 ref 的按钮会打开它。按钮点了，app 收到 `action`，card 是这个 ref。
     pub fn page(p: Page) {
         let s = serde_json::to_vec(&p).unwrap_or_default();
@@ -414,7 +414,7 @@ pub mod host {
         }
     }
 
-    /// 跟着 app 装来的文件：app 目录 assets/ 下的，只读（ADR 0028）。名字的规矩和数据一样。
+    /// 跟着 app 装来的文件：app 目录 assets/ 下的，只读。名字的规矩和数据一样。
     pub fn asset_read(name: &str) -> Option<Vec<u8>> {
         #[cfg(target_arch = "wasm32")]
         {
@@ -568,7 +568,7 @@ pub mod host {
         }
     }
 
-    /// 开始录一段话（docs/adr/0018）：系统叮一声开始录，录完给你一个 [`Event::Recorded`]（带你给的 `tag`）。
+    /// 开始录一段话：系统叮一声开始录，录完给你一个 [`Event::Recorded`]（带你给的 `tag`）。
     /// 最长 60 秒，到了自己停、交给你。返回这段的编号；0 是没开始：清单没要 `mic`、不是在处理人点的按钮（[`Event::Action`]）、
     /// 已经有一段在录。
     pub fn record_start(tag: &str) -> u64 {
@@ -598,7 +598,7 @@ pub mod host {
         native::STOPS.lock().unwrap().push((id, send));
     }
 
-    /// 打一通电话（docs/adr/0019）：系统连 `url`（`ws://` 或 `wss://`，口令放 `Authorization: Bearer`），叮一声，开麦。
+    /// 打一通电话：系统连 `url`（`ws://` 或 `wss://`，口令放 `Authorization: Bearer`），叮一声，开麦。
     /// 声音系统自己转，你只管信令：连上了、来了文字、结束了都是 [`Event::Call`]，文字用 [`call_send`] 发。
     /// `who` 是和谁打，写进日志。返回这通的编号；0 是没开始：清单没要 `call`、不是在处理人点的按钮（[`Event::Action`]）、
     /// 已经有一通在打或在录一段话。
@@ -658,7 +658,7 @@ pub mod host {
     }
 
     /// GET 一个地址，要字符串。不是 2xx 就报错。
-    /// 给 MCU 发一帧的内容（docs/adr/0021；清单要 `mcu = true`）。内容是什么，app 和 MCU 固件自己约定，最长 1024 字节。
+    /// 给 MCU 发一帧的内容（清单要 `mcu = true`）。内容是什么，app 和 MCU 固件自己约定，最长 1024 字节。
     /// 没要 MCU、太长、线没接上回 false。
     pub fn mcu_send(payload: &[u8]) -> bool {
         #[cfg(target_arch = "wasm32")]
@@ -697,7 +697,7 @@ pub mod host {
         native::MCU_IN.lock().unwrap().pop_front()
     }
 
-    /// 在局域网里广播一段（docs/adr/0029；清单要 `lan = true`）：别的设备上同名的 app 收得到，自己收不到。
+    /// 在局域网里广播一段（清单要 `lan = true`）：别的设备上同名的 app 收得到，自己收不到。
     /// 最长 1200 字节。不配对、不验来源，谁都能发：收到的别当成人说的。没要、太长、网还没起来回 false。
     pub fn lan_send(payload: &[u8]) -> bool {
         #[cfg(target_arch = "wasm32")]
@@ -752,7 +752,7 @@ pub mod host {
         }
     }
 
-    /// 设备的所在地（docs/adr/0016）：清单里写了 `location = true` 才有；人还没设也是 None。
+    /// 设备的所在地：清单里写了 `location = true` 才有；人还没设也是 None。
     pub fn location() -> Option<crate::Place> {
         #[cfg(target_arch = "wasm32")]
         {

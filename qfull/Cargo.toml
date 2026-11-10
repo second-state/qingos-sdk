@@ -3,7 +3,7 @@ name = "qfull"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "QingOS 跑整屏 app 的那一头：画面、按键、合成器、wasmtime 配置，和开发机上的装载器（ADR 0030、0034）"
+description = "QingOS 跑整屏 app 的那一头：画面、按键、合成器、wasmtime 配置，和开发机上的装载器"
 license = "MIT"
 
 [dependencies]
