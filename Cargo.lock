@@ -574,7 +574,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "qingos-host"
+name = "qfull"
 version = "0.1.0"
 dependencies = [
  "anyhow",

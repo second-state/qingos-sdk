@@ -7,7 +7,7 @@ QingOS 是一个基于 Linux 内核的 agentic 操作系统。QingOS 上的 app 
 |---|---|
 | `qtypes` | 纯数据：能力声明、卡、页、结果。运行时和 app 共用 |
 | `qapp` | 写 app 的库，编成 `wasm32-unknown-unknown`。能力、卡、自己的数据、联网、定时，还有整屏页（`qapp::full`） |
-| `qingos-host` | 运行时跑整屏 app 的那一头：画面、按键、合成器、wasmtime 配置，和开发机上只跑整屏 app 的装载器 |
+| `qfull` | 运行时跑整屏 app 的那一头：画面、按键、合成器、wasmtime 配置，和开发机上只跑整屏 app 的装载器 |
 
 和运行时的约定在 [docs/ABI.md](docs/ABI.md)。
 

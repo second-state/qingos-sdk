@@ -23,7 +23,7 @@ app 是一个 `wasm32-unknown-unknown` 模块。`qapp::main!` 把下面这些都
 
 ### 整屏 app 用到的
 
-一个整屏 app（游戏）只用得到这一组。开发机上的装载器（`qingos-host` 的 `Player`）只接这一组，调了别的就出错。
+一个整屏 app（游戏）只用得到这一组。开发机上的装载器（`qfull` 的 `Player`）只接这一组，调了别的就出错。
 
 | 名字 | 签名 | 做什么 |
 |---|---|---|
@@ -61,4 +61,4 @@ memory_mb = 16
 cover     = "assets/cover.png"  # 96×80 的 PNG，家上的格子用
 ```
 
-`.cwasm` 和运行时的 wasmtime 版本绑在一起。编它要用 `qingos-host` 的 `precompile`，配置一样才读得进来。
+`.cwasm` 和运行时的 wasmtime 版本绑在一起。编它要用 `qfull` 的 `precompile`，配置一样才读得进来。

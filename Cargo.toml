@@ -1,7 +1,7 @@
 # QingOS 的公开 SDK：写 app 的库，和整屏页的系统这头。
 [workspace]
 resolver = "2"
-members = ["qtypes", "qapp", "qingos-host"]
+members = ["qtypes", "qapp", "qfull"]
 
 [workspace.package]
 version = "0.1.0"

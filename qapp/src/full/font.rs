@@ -1,7 +1,6 @@
 //! 点阵字：一个字是 12 行，一行是一个 `u16` 的位，最高位在最左边。
 //!
-//! 字形不在这里。每个 app 用 `scripts/bake-font.py` 把自己用到的字烘成一个 `Font`（ADR 0030 第 18 条），
-//! 不把整套字体编进每个 app。字体是缝合像素字体 12px（OFL‑1.1），许可证在 `scripts/fonts/fusion-pixel-font/`。
+//! 字形不在这里：app 自己带一个 `Font`（一张排好序的 `Glyph` 表）。
 
 use super::{Frame, Sprite};
 
