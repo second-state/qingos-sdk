@@ -399,7 +399,15 @@ impl Full {
     }
 }
 
-/// 把四个导入函数接到 linker 上。`get` 从宿主的数据里拿这个 app 的 [`Full`]。
+/// 设备上所有整屏 app 看到的语言：0 英文，1 中文。系统设置换语言时设一次。
+static LANG: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 换整屏 app 看到的语言：`zh` 开头是中文，别的都是英文。
+pub fn set_lang(code: &str) {
+    LANG.store(code.starts_with("zh") as u32, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 把五个导入函数接到 linker 上。`get` 从宿主的数据里拿这个 app 的 [`Full`]。
 pub fn link<T: 'static>(linker: &mut Linker<T>, get: fn(&T) -> &Arc<Full>) -> anyhow::Result<()> {
     fn mem<T>(c: &mut Caller<'_, T>) -> Option<wasmtime::Memory> {
         c.get_export("memory").and_then(|e| e.into_memory())
@@ -433,6 +441,7 @@ pub fn link<T: 'static>(linker: &mut Linker<T>, get: fn(&T) -> &Arc<Full>) -> an
             -1
         }
     })?;
+    linker.func_wrap("qing", "lang", |_: Caller<'_, T>| -> u32 { LANG.load(std::sync::atomic::Ordering::Relaxed) })?;
     Ok(())
 }
 

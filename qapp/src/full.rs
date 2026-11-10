@@ -61,6 +61,7 @@ mod ffi {
         pub fn buttons() -> u32;
         pub fn tone(channel: u32, hz: u32, ms: u32, volume: u32) -> i32;
         pub fn tone_wav(ptr: u32, len: u32) -> i32;
+        pub fn lang() -> u32;
     }
 }
 
@@ -194,6 +195,39 @@ pub fn tone_wav(wav: &[u8]) -> bool {
     }
 }
 
+/// 系统现在用的语言。人在系统设置里换；游戏每次出字时问一次，换了马上跟着变。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Lang {
+    /// 英文。系统没说（旧的系统）也当英文。
+    #[default]
+    En,
+    /// 中文。
+    Zh,
+}
+
+impl Lang {
+    /// 按语言二选一：`lang().pick("Start", "开始")`。
+    pub fn pick<T>(self, en: T, zh: T) -> T {
+        match self {
+            Lang::En => en,
+            Lang::Zh => zh,
+        }
+    }
+}
+
+/// 系统现在用的语言。
+pub fn lang() -> Lang {
+    #[cfg(target_arch = "wasm32")]
+    let n = unsafe { ffi::lang() };
+    #[cfg(not(target_arch = "wasm32"))]
+    let n = native::LANG.with(|l| l.get());
+    if n == 1 {
+        Lang::Zh
+    } else {
+        Lang::En
+    }
+}
+
 /// 开发机上（不是 wasm）测 app 用：设按键、看交了几帧、发了哪些音调。
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native {
@@ -203,11 +237,28 @@ pub mod native {
     pub static FRAMES: AtomicU64 = AtomicU64::new(0);
     /// 声道、频率、毫秒、音量。
     pub static TONES: Mutex<Vec<(u32, u32, u32, u32)>> = Mutex::new(Vec::new());
+    thread_local! {
+        /// 这个线程上 [`super::lang`] 回什么：0 英文，1 中文。测试各自设，互不影响。
+        pub static LANG: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// 测试里换语言：只换这个线程的。
+    pub fn set_lang(l: super::Lang) {
+        LANG.with(|c| c.set(l as u32));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lang_defaults_to_english_and_follows_the_setting() {
+        assert_eq!(lang(), Lang::En);
+        native::set_lang(Lang::Zh);
+        assert_eq!(lang().pick("Start", "开始"), "开始");
+        native::set_lang(Lang::En);
+    }
 
     #[test]
     fn pressed_is_only_the_first_frame() {

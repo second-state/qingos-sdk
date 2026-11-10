@@ -31,6 +31,7 @@ app 是一个 `wasm32-unknown-unknown` 模块。`qapp::main!` 把下面这些都
 | `buttons` | `() -> u32` | 这一帧哪些键按着。位：上 0、下 1、左 2、右 3、A 4、B 5、X 6、Y 7、L1 8、R1 9、Start 10、Select 11 |
 | `tone` | `(channel: u32, hz: u32, ms: u32, volume: u32) -> i32` | 声道 0、1 方波，2 三角波，3 噪声。`ms` 是 0 就停；音量 0–100 |
 | `tone_wav` | `(ptr: u32, len: u32) -> i32` | 第五个声道放一段 WAV（16 位 PCM，最长 2 秒） |
+| `lang` | `() -> u32` | 系统现在用的语言：0 英文，1 中文。人随时能换，出字时再问 |
 | `log` | `(ptr: u32, len: u32)` | 记一行日志 |
 | `data_read` | `(kptr, klen) -> u64` | 读自己的数据（名字是一个文件名） |
 | `data_write` | `(kptr, klen, vptr, vlen) -> i32` | 存。0 是存了 |

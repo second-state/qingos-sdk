@@ -1,23 +1,25 @@
 # QingOS SDK
 
-QingOS 是一个基于 Linux 内核的 agentic 操作系统。QingOS 上的 app 是一个 wasm 模块加一份清单 `app.toml`，
-运行时用 wasmtime 跑它。这个仓库是写 app 要用的几个库：
+English · [中文](README.zh-CN.md)
 
-| 库 | 做什么 |
+QingOS is an agentic operating system built on the Linux kernel. An app on QingOS is a wasm module plus a manifest, `app.toml`.
+The runtime runs it with wasmtime. This repository holds the libraries you need to write apps:
+
+| Library | What it does |
 |---|---|
-| `qtypes` | 纯数据：能力声明、卡、页、结果。运行时和 app 共用 |
-| `qapp` | 写 app 的库，编成 `wasm32-unknown-unknown`。能力、卡、自己的数据、联网、定时，还有整屏页（`qapp::full`） |
-| `qfull` | 运行时跑整屏 app 的那一头：画面、按键、合成器、wasmtime 配置，和开发机上只跑整屏 app 的装载器 |
+| `qtypes` | Plain data: capability declarations, cards, pages, results. The runtime and apps share it |
+| `qapp` | The library for apps, built for `wasm32-unknown-unknown`: capabilities, cards, the app's own data, network, timers, and full-screen pages (`qapp::full`) |
+| `qfull` | The runtime side of full-screen apps: screen, buttons, synthesizer, the wasmtime configuration, and a loader on your computer that runs only full-screen apps |
 
-和运行时的约定在 [docs/ABI.md](docs/ABI.md)。
+The contract with the runtime is in [docs/ABI.md](docs/ABI.md) (in Chinese).
 
-想做游戏，用 [VibeGame SDK](https://github.com/longzhi/vibegame-sdk)：它建在这几个库上面，带命令行、Skill、样板游戏。
+To make games, use the [VibeGame SDK](https://github.com/longzhi/vibegame-sdk). It is built on these libraries and comes with a command line, a Skill and sample games.
 
-## 谁在用
+## Who uses it
 
-- QingOS 的运行时用 git 依赖钉这个仓库的一个提交。
-- [VibeGame SDK](https://github.com/longzhi/vibegame-sdk) 也一样。
+- The QingOS runtime pins one commit of this repository as a git dependency.
+- The [VibeGame SDK](https://github.com/longzhi/vibegame-sdk) does the same.
 
-改了这里的接口，要去这两处跟上。
+When you change an interface here, update both of them.
 
-开源协议：MIT。
+License: MIT.
