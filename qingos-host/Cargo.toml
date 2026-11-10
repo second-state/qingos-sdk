@@ -1,0 +1,18 @@
+[package]
+name = "qingos-host"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "QingOS 跑整屏 app 的那一头：画面、按键、合成器、wasmtime 配置，和开发机上的装载器（ADR 0030、0034）"
+license = "MIT"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+# 设备上只带运行时，不带编译器。开发机上开 compile：直接跑 .wasm、给别的机器编 .cwasm。
+wasmtime = { version = "37", default-features = false, features = ["runtime", "std"] }
+
+[features]
+default = []
+# all-arch：开发机（arm64）给掌机和 x86 镜像编本机码。
+compile = ["wasmtime/cranelift", "wasmtime/all-arch"]

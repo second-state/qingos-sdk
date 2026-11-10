@@ -1,0 +1,25 @@
+# QingOS 的公开 SDK：写 app 的库，和整屏页的系统这头。
+[workspace]
+resolver = "2"
+members = ["qtypes", "qapp", "qingos-host"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT"
+repository = "https://github.com/longzhi/qingos-sdk"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+chrono = "0.4"
+
+# 开发机上直接编 .wasm：编译器不优化时编一个小 app 要两秒多。
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.regalloc2]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3

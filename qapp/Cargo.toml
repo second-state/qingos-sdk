@@ -1,0 +1,18 @@
+[package]
+name = "qapp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "qing · 写 wasm app 的框架：和 qapp 一样的声明和能力，编成一个 .wasm，由运行时进程隔离着跑"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+qtypes = { path = "../qtypes" }
+serde_json.workspace = true
+anyhow.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock"] }

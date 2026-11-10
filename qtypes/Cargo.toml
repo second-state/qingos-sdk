@@ -1,0 +1,10 @@
+[package]
+name = "qtypes"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "qing · 纯数据：能力声明、卡、结果。核心和 wasm 里的 app 共用，没有别的依赖"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
