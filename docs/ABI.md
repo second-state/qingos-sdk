@@ -41,6 +41,32 @@ app 是一个 `wasm32-unknown-unknown` 模块。`qapp::main!` 把下面这些都
 | `now` | `() -> i64` | Unix 秒 |
 | `tz_offset` | `() -> i32` | 时区偏移，秒 |
 
+### 在局域网上等别人连进来
+
+清单写了 `listen`，系统开这个端口、收连接，按行交给 app。app 不碰 socket。开发机上的 `Player` 也接这一组。
+
+| 名字 | 签名 | 做什么 |
+|---|---|---|
+| `conn_send` | `(id: u64, ptr: u32, len: u32) -> i32` | 往一条连接发一行，系统补换行。行里不能有换行，最长 8192 字节。0 是发了 |
+| `conn_close` | `(id: u64)` | 关掉一条连接 |
+| `mdns_set` | `(ptr: u32, len: u32) -> i32` | `{"instance": "...", "txt": {"k": "v"}}`：系统替它回的 mDNS 的实例名和 TXT。清单要写 `mdns`。0 是换了 |
+| `random` | `(len: u32) -> u64` | `len` 个随机字节（最多 4096），从系统的随机源来。不用写清单 |
+
+连接上的事是事件（`notifications/qing/event`）：
+
+- `{"kind": "conn", "id": 1, "what": "open", "peer": "192.168.1.20:51234"}`
+- `{"kind": "conn", "id": 1, "what": "line", "text": "..."}`：一行，不带换行。超过 8192 字节的整行丢掉，连接不断
+- `{"kind": "conn", "id": 1, "what": "close"}`
+
+规矩：
+
+- 只收局域网（10/8、172.16/12、192.168/16、169.254/16）和本机（127/8）来的连接，别的直接关。
+- 同时最多 4 个连接，多的直接关。
+- 系统不看内容，不配对。谁能连进来、连进来能做什么，app 自己管（比如用 Noise 握手）。
+- 整屏 app 停下（不在前台、合盖）时，系统关掉端口和所有连接，撤掉 mDNS。接着跑时再开。
+- 没调 `mdns_set` 时，实例名是 app 的名字，TXT 是空的。
+- 开发机上：端口真开，`QING_LISTEN_PORT` 换端口；mDNS 只记日志，不发。连接上的事在每一帧开头交给 app。
+
 ### 别的 app 用的
 
 `push`、`page`、`sound`、`sound_stop`、`http`、`http_start`、`setting`、`location`、`name`、`after`、
@@ -60,6 +86,8 @@ screen    = "full"            # 整屏页
 rate_hz   = 60
 memory_mb = 16
 cover     = "assets/cover.png"  # 96×80 的 PNG，家上的格子用
+listen    = 7342              # 可选：在局域网上等别人连进来的端口，1024 以上，一个 app 一个
+mdns      = "_mygame._tcp"    # 可选：系统替它回这个 mDNS 服务，端口就是 listen
 ```
 
 `.cwasm` 和运行时的 wasmtime 版本绑在一起。编它要用 `qfull` 的 `precompile`，配置一样才读得进来。

@@ -2,10 +2,15 @@
 //!
 //! 只接整屏 app 用得到的导入函数（`docs/ABI.md`「整屏 app」那一组）：
 //! 整屏页的 `frame`、`buttons`、`tone`、`tone_wav`，加 `log`、`data_*`、`asset_read`、`now`、`tz_offset`。
+//! 清单写了 `listen`，照样开端口、收连接（[`crate::listen`]），加 `conn_send`、`conn_close`、`mdns_set`、`random`。
+//! 端口用 `QING_LISTEN_PORT` 换，几个仿真互不串。mDNS 在开发机上只记日志，不发。连接上的事在每一帧开头交给 app。
 //! 别的导入函数（联网、推卡……）调了就出错：整屏 app 不该用它们。
 //! 设备上的运行时不用这里：它有完整的 app 装载器，整屏页接的是同一份 [`crate::full::link`]。
 
 use crate::full::{self, Full};
+use crate::listen::Listener;
+use std::collections::VecDeque;
+use std::sync::Mutex;
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -19,6 +24,39 @@ struct Host {
     data: Option<PathBuf>,
     assets: Option<PathBuf>,
     limits: StoreLimits,
+    /// 清单写了 `listen` 才有。
+    listen: Option<Arc<Listener>>,
+    /// 清单的 `mdns`，空的是没写。
+    mdns: String,
+    /// 开的端口（清单的 `listen`，或者 `QING_LISTEN_PORT`）。
+    port: u16,
+    /// app 调过 `mdns_set` 了。
+    mdns_set: bool,
+}
+
+/// 交事件要的导出：内存、`qing_alloc`、`qing_free`、`qing_call`。
+struct Calls {
+    memory: Memory,
+    alloc: TypedFunc<u32, u32>,
+    free: TypedFunc<(u32, u32), ()>,
+    call: TypedFunc<(u32, u32), u64>,
+}
+
+/// 清单里装载器要看的几项。
+#[derive(serde::Deserialize, Default)]
+struct Manifest {
+    #[serde(default)]
+    app: ManifestApp,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ManifestApp {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    listen: u16,
+    #[serde(default)]
+    mdns: String,
 }
 
 /// 一个跑着的整屏 app。
@@ -26,6 +64,11 @@ pub struct Player {
     store: Store<Host>,
     tick: TypedFunc<(), ()>,
     full: Arc<Full>,
+    /// 交事件要的几个导出（`qapp::main!` 都导出），少一个就不交。
+    call: Option<Calls>,
+    /// 连接上来的事，下一帧开头交给 app。
+    events: Arc<Mutex<VecDeque<serde_json::Value>>>,
+    listen: Option<Arc<Listener>>,
 }
 
 fn engine() -> Result<&'static Engine> {
@@ -141,15 +184,60 @@ impl Player {
             let v = serde_json_lite(&keys);
             give(&mut c, &m, v.as_bytes())
         })?;
+        linker.func_wrap("qing", "conn_send", |mut c: Caller<'_, Host>, id: u64, p: u32, n: u32| -> i32 {
+            let Some(m) = mem(&mut c) else { return -1 };
+            let line = String::from_utf8_lossy(&bytes(&m, &c, p, n)).into_owned();
+            match &c.data().listen {
+                Some(l) if l.send(id, &line) => 0,
+                _ => -1,
+            }
+        })?;
+        linker.func_wrap("qing", "conn_close", |c: Caller<'_, Host>, id: u64| {
+            if let Some(l) = &c.data().listen {
+                l.close(id);
+            }
+        })?;
+        linker.func_wrap("qing", "mdns_set", |mut c: Caller<'_, Host>, p: u32, n: u32| -> i32 {
+            let Some(m) = mem(&mut c) else { return -1 };
+            let req = bytes(&m, &c, p, n);
+            let h = c.data_mut();
+            if h.listen.is_none() || h.mdns.is_empty() {
+                return -1;
+            }
+            let Some((instance, txt)) = crate::listen::parse_mdns_set(&req) else { return -1 };
+            h.mdns_set = true;
+            eprintln!("[mdns] 会回 {}：实例「{instance}」，端口 {}，TXT {} 项（开发机上不发）", h.mdns, h.port, txt.len());
+            0
+        })?;
+        linker.func_wrap("qing", "random", |mut c: Caller<'_, Host>, n: u32| -> u64 {
+            let Some(m) = mem(&mut c) else { return 0 };
+            let b = crate::listen::random(n as usize);
+            give(&mut c, &m, &b)
+        })?;
         linker.func_wrap("qing", "now", |_: Caller<'_, Host>| -> i64 { chrono::Local::now().timestamp() })?;
         linker.func_wrap("qing", "tz_offset", |_: Caller<'_, Host>| -> i32 { chrono::Local::now().offset().local_minus_utc() })?;
         // 别的导入函数：装得上，调了就出错。
         linker.define_unknown_imports_as_traps(&module)?;
 
         let full = Arc::new(Full::default());
-        let assets = path.ancestors().skip(1).find(|d| d.join("app.toml").is_file()).map(|d| d.join("assets"));
+        let dir = path.ancestors().skip(1).find(|d| d.join("app.toml").is_file());
+        let assets = dir.map(|d| d.join("assets"));
+        let manifest: Manifest = match dir {
+            Some(d) => {
+                let f = d.join("app.toml");
+                let text = std::fs::read_to_string(&f).with_context(|| format!("读不了 {}", f.display()))?;
+                toml::from_str(&text).with_context(|| format!("{} 格式不对", f.display()))?
+            }
+            None => Manifest::default(),
+        };
+        let events: Arc<Mutex<VecDeque<serde_json::Value>>> = Arc::default();
+        let port = std::env::var("QING_LISTEN_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(manifest.app.listen);
+        let listen = (manifest.app.listen != 0).then(|| {
+            let q = events.clone();
+            Arc::new(Listener::new(&manifest.app.name, port, Arc::new(move |v| q.lock().unwrap().push_back(v))))
+        });
         let limits = StoreLimitsBuilder::new().memory_size((memory_mb.max(1) as usize) << 20).instances(1).build();
-        let mut store = Store::new(engine, Host { full: full.clone(), data, assets, limits });
+        let mut store = Store::new(engine, Host { full: full.clone(), data, assets, limits, listen: listen.clone(), mdns: manifest.app.mdns.clone(), port, mdns_set: false });
         store.limiter(|h| &mut h.limits);
         store.set_epoch_deadline(30);
         let inst = linker.instantiate(&mut store, &module).with_context(|| format!("{} 起不来", path.display()))?;
@@ -157,11 +245,49 @@ impl Player {
             init.call(&mut store, ()).map_err(|e| anyhow!("qinit 出错：{e:#}"))?;
         }
         let tick = inst.get_typed_func::<(), ()>(&mut store, "qing_tick").context("没有导出 qing_tick：不是整屏 app")?;
-        Ok(Player { store, tick, full })
+        let call = (|| {
+            Some(Calls {
+                memory: inst.get_memory(&mut store, "memory")?,
+                alloc: inst.get_typed_func(&mut store, "qing_alloc").ok()?,
+                free: inst.get_typed_func(&mut store, "qing_free").ok()?,
+                call: inst.get_typed_func(&mut store, "qing_call").ok()?,
+            })
+        })();
+        if let Some(l) = &listen {
+            l.start().context("开不了端口（清单的 listen，换一个用 QING_LISTEN_PORT）")?;
+            if !manifest.app.mdns.is_empty() && !store.data().mdns_set {
+                eprintln!("[mdns] 会回 {}：实例「{}」，端口 {port}（开发机上不发）", manifest.app.mdns, manifest.app.name);
+            }
+        }
+        Ok(Player { store, tick, full, call, events, listen })
+    }
+
+    /// 开着的端口（清单写了 `listen`），没有是 None。
+    pub fn listening(&self) -> Option<u16> {
+        self.listen.as_ref().and_then(|l| l.bound())
+    }
+
+    /// 交一个事件：`notifications/qing/event`，和设备上一样走 `qing_call`。
+    fn event(&mut self, ev: serde_json::Value) -> Result<()> {
+        let Some(c) = &self.call else { return Ok(()) };
+        let req = serde_json::to_vec(&serde_json::json!({ "method": "notifications/qing/event", "params": ev }))?;
+        let store = &mut self.store;
+        let p = c.alloc.call(&mut *store, req.len() as u32)?;
+        c.memory.write(&mut *store, p as usize, &req)?;
+        let packed = c.call.call(&mut *store, (p, req.len() as u32))?;
+        // 旧版 qapp 编的 app 释放回复时会出错（容量和长度不一样），和设备上的运行时一样不管它。
+        let _ = c.free.call(&mut *store, ((packed >> 32) as u32, packed as u32));
+        Ok(())
     }
 
     /// 跑一帧：交这一帧的按键，调一次 `qing_tick`。app 出错（panic、死循环）回错，之后不能再跑。
+    /// 连接上来的事先交（每个事件一样有一帧的时间）。
     pub fn tick(&mut self, buttons: u32) -> Result<()> {
+        loop {
+            let Some(ev) = self.events.lock().unwrap().pop_front() else { break };
+            self.store.set_epoch_deadline(TICK_DEADLINE_SECS);
+            self.event(ev).map_err(|e| anyhow!("app 收事件时出错：{e:#}"))?;
+        }
         self.full.set_buttons(buttons);
         self.store.set_epoch_deadline(TICK_DEADLINE_SECS);
         self.tick.call(&mut self.store, ()).map_err(|e| anyhow!("app 在这一帧出错：{e:#}"))

@@ -2,10 +2,12 @@
 //!
 //! - [`full`]：整屏页的四样能力。画面、按键、合成器，加上把画面放大到屏上。设备上的运行时用它。
 //! - [`config`]：wasmtime 的配置。编本机码和装本机码必须用同一份，不然 `.cwasm` 读不进来。
+//! - [`listen`]：app 在局域网上等别人连进来，系统开端口、按行交给 app。设备上的运行时和 [`Player`] 都用它。
 //! - [`Player`]：只跑整屏 app 的装载器。开发机上的命令行（`vibegame`）用它，设备上不用。
 //! - [`precompile`]：把 `.wasm` 编成某台机器的 `.cwasm`（要 `compile` 特性）。
 
 pub mod full;
+pub mod listen;
 mod player;
 
 pub use player::Player;

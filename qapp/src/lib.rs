@@ -17,7 +17,8 @@
 //! ```
 //!
 //! 和运行时之间的约定（ABI）在 `docs/APP.md`「和运行时的约定」一节：模块导出 `qing_alloc / qing_free / qing_call / qinit`，
-//! 导入 `qing.log / push / data_read / data_write / data_list / data_delete / now / tz_offset / http / http_start / setting / name / after`。
+//! 导入 `qing.log / push / data_read / data_write / data_list / data_delete / now / tz_offset / http / http_start / setting / name / after`，
+//! 局域网上等连的 `conn_send / conn_close / mdns_set`，和 `random`。
 //! 整屏页的 `frame / buttons / tone / tone_wav` 在 [`full`] 里。
 //! 来回都是 JSON 字节。
 
@@ -35,7 +36,7 @@ pub use qtypes::{Button, Card, CardBody, Effect, Intent, ListItem, Node, Outcome
 pub mod prelude {
     pub use crate::host;
     pub use crate::spoken;
-    pub use crate::{App, CallState, Capability, Event};
+    pub use crate::{App, CallState, Capability, Conn, Event};
     pub use anyhow::{anyhow, bail, Context, Result};
     pub use qtypes::page::{Gap, Icon, Node, Page, Size, Tone};
     pub use qtypes::{Card, CardBody, Effect, Intent, ListItem, Outcome, Place, Risk, SettingSpec, ToolSpec};
@@ -77,6 +78,8 @@ pub enum Event {
     /// 人在用摇杆开你（清单写了 `stick`）：左 x、左 y、右 x、右 y，-1 到 1，右和上是正。
     /// 一秒十次左右。四个都是 0 是松开了。等不到下一个就当松开了：手机可能断了网。
     Stick { axes: [f32; 4] },
+    /// 局域网上连进来的一条连接（清单写了 `listen`）：连上了、来了一行、断了。`id` 认是哪一条，回话用 [`host::conn_send`]。
+    Conn { id: u64, what: Conn },
     /// 不认识的，原样给你。
     Other(Value),
 }
@@ -123,6 +126,14 @@ impl Event {
             Some("mute") => Event::Mute { on: v["on"].as_bool().unwrap_or(false) },
             Some("notice") => Event::Notice { source: s("source").unwrap_or_default(), text: s("text").unwrap_or_default() },
             Some("halt") => Event::Halt,
+            Some("conn") => Event::Conn {
+                id: v["id"].as_u64().unwrap_or(0),
+                what: match v["what"].as_str() {
+                    Some("open") => Conn::Open { peer: s("peer").unwrap_or_default() },
+                    Some("line") => Conn::Line(s("text").unwrap_or_default()),
+                    _ => Conn::Close,
+                },
+            },
             _ => Event::Other(v.clone()),
         }
     }
@@ -137,6 +148,17 @@ pub enum CallState {
     Text(String),
     /// 结束了：为什么（挂了、断了、连不上……）。来电那条连接不会有这个，断了系统自己重连。
     End(String),
+}
+
+/// 一条连进来的连接上的事（[`Event::Conn`]）。
+#[derive(Debug, Clone, PartialEq)]
+pub enum Conn {
+    /// 连上了。`peer` 是对方的地址和端口，比如 `192.168.1.20:51234`。
+    Open { peer: String },
+    /// 来了一行，不带换行。系统不看内容。
+    Line(String),
+    /// 断了：对方关的、你关的、系统关的（app 停下）都是这个。之后这个 `id` 不再用。
+    Close,
 }
 
 type EventFn = Box<dyn Fn(&Value) + Send>;
@@ -278,7 +300,8 @@ macro_rules! main {
         #[no_mangle]
         pub extern "C" fn qing_call(ptr: u32, len: u32) -> u64 {
             let req = unsafe { Vec::from_raw_parts(ptr as *mut u8, len as usize, len as usize) };
-            let out = $crate::__call(&req);
+            // 变成容量正好等于长度的一块：运行时按长度 `qing_free`，容量多了释放时会出错。
+            let out = $crate::__call(&req).into_boxed_slice();
             drop(req);
             let n = out.len() as u32;
             let p = out.as_ptr() as u32;
@@ -325,8 +348,19 @@ pub mod host {
             pub fn mcu_recv() -> u64;
             pub fn lan_send(ptr: u32, len: u32) -> i32;
             pub fn lan_recv() -> u64;
+            pub fn conn_send(id: u64, ptr: u32, len: u32) -> i32;
+            pub fn conn_close(id: u64);
+            pub fn mdns_set(ptr: u32, len: u32) -> i32;
+            pub fn random(len: u32) -> u64;
         }
     }
+
+    /// `mdns_set` 给的：实例名和 TXT。开发机上的替身记着它。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub type Mdns = (String, Vec<(String, String)>);
+
+    /// 连进来的连接上一行最长几个字节（不算换行）。
+    pub const CONN_LINE_MAX: usize = 8192;
 
     /// 运行时写进来的一段字节：高 32 位地址，低 32 位长度；0 表示没有。
     #[cfg(target_arch = "wasm32")]
@@ -721,6 +755,73 @@ pub mod host {
         native::LAN_IN.lock().unwrap().pop_front()
     }
 
+    /// 往连进来的一条连接发一行（清单写了 `listen`）。系统补上换行。
+    /// 行里不能有换行，最长 8192 字节。连接不在了、太长、有换行回 false。
+    pub fn conn_send(id: u64, line: &str) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        unsafe {
+            ffi::conn_send(id, line.as_ptr() as u32, line.len() as u32) == 0
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if line.len() > CONN_LINE_MAX || line.contains('\n') {
+                return false;
+            }
+            native::CONN_SENT.lock().unwrap().push((id, line.to_string()));
+            true
+        }
+    }
+
+    /// 关掉连进来的一条连接。之后来一个 [`crate::Conn::Close`]。
+    pub fn conn_close(id: u64) {
+        #[cfg(target_arch = "wasm32")]
+        unsafe {
+            ffi::conn_close(id)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        native::CONN_CLOSED.lock().unwrap().push(id);
+    }
+
+    /// 定系统替你回的 mDNS 服务（清单写了 `mdns`）：实例名和 TXT。再调一次就换掉。
+    /// 实例名不能空、不能有点，最长 63 字节；TXT 的每一项 `k=v` 最长 255 字节。不对、清单没写 `mdns` 回 false。
+    /// 没调之前，实例名是 app 的名字，TXT 是空的。
+    pub fn mdns_set(instance: &str, txt: &[(&str, &str)]) -> bool {
+        let mut t = serde_json::Map::new();
+        for (k, v) in txt {
+            t.insert(k.to_string(), json!(v));
+        }
+        let req = json!({ "instance": instance, "txt": t }).to_string();
+        #[cfg(target_arch = "wasm32")]
+        unsafe {
+            ffi::mdns_set(req.as_ptr() as u32, req.len() as u32) == 0
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = req;
+            if instance.is_empty() || instance.len() > 63 || instance.contains('.') || txt.iter().any(|(k, v)| k.is_empty() || k.len() + v.len() + 1 > 255) {
+                return false;
+            }
+            *native::MDNS.lock().unwrap() = Some((instance.to_string(), txt.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()));
+            true
+        }
+    }
+
+    /// `n` 个随机字节，从系统的随机源来（做钥匙、配对码用）。最多 4096 个。
+    pub fn random(n: usize) -> Vec<u8> {
+        let n = n.min(4096);
+        #[cfg(target_arch = "wasm32")]
+        unsafe {
+            take(ffi::random(n as u32)).unwrap_or_default()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use std::io::Read;
+            let mut b = vec![0u8; n];
+            std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b)).expect("读不了 /dev/urandom");
+            b
+        }
+    }
+
     pub fn http_get(url: &str) -> Result<String> {
         let r = http("GET", url, &[], None)?;
         if !r.ok() {
@@ -887,6 +988,12 @@ pub mod host {
         pub static MCU_IN: Mutex<std::collections::VecDeque<Vec<u8>>> = Mutex::new(std::collections::VecDeque::new());
         pub static LAN_SENT: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
         pub static LAN_IN: Mutex<std::collections::VecDeque<Vec<u8>>> = Mutex::new(std::collections::VecDeque::new());
+        /// app 调过的 `conn_send`：编号、一行。
+        pub static CONN_SENT: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
+        /// app 调过的 `conn_close`。
+        pub static CONN_CLOSED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+        /// `mdns_set` 给的实例名和 TXT。
+        pub static MDNS: Mutex<Option<super::Mdns>> = Mutex::new(None);
     }
 
     /// 本机测试用的替身。
@@ -1009,6 +1116,38 @@ pub mod host {
             std::mem::take(&mut *native::MCU_SENT.lock().unwrap())
         }
 
+        /// 连进来的一条连接上来一件事：排进队列（`pump` 送进 app）。
+        pub fn conn_event(id: u64, what: crate::Conn) {
+            let mut ev = json!({ "kind": "conn", "id": id });
+            match what {
+                crate::Conn::Open { peer } => {
+                    ev["what"] = json!("open");
+                    ev["peer"] = json!(peer);
+                }
+                crate::Conn::Line(t) => {
+                    ev["what"] = json!("line");
+                    ev["text"] = json!(t);
+                }
+                crate::Conn::Close => ev["what"] = json!("close"),
+            }
+            native::EVENTS.lock().unwrap().push(ev);
+        }
+
+        /// app 调过的 `conn_send`（编号、一行），按顺序。取走。
+        pub fn conn_sent() -> Vec<(u64, String)> {
+            std::mem::take(&mut *native::CONN_SENT.lock().unwrap())
+        }
+
+        /// app 调过的 `conn_close`，按顺序。取走。
+        pub fn conn_closed() -> Vec<u64> {
+            std::mem::take(&mut *native::CONN_CLOSED.lock().unwrap())
+        }
+
+        /// `mdns_set` 给的实例名和 TXT。没调过是 None。
+        pub fn mdns() -> Option<super::Mdns> {
+            native::MDNS.lock().unwrap().clone()
+        }
+
         /// 定频调一次（系统按清单的 `rate_hz` 调的那个）。
         pub fn tick() {
             crate::__tick();
@@ -1031,6 +1170,9 @@ pub mod host {
             native::MCU_IN.lock().unwrap().clear();
             native::LAN_SENT.lock().unwrap().clear();
             native::LAN_IN.lock().unwrap().clear();
+            native::CONN_SENT.lock().unwrap().clear();
+            native::CONN_CLOSED.lock().unwrap().clear();
+            *native::MDNS.lock().unwrap() = None;
         }
     }
 }
@@ -1098,6 +1240,33 @@ mod tests {
             e => panic!("{e:?}"),
         }
         assert!(matches!(Event::parse(&json!({ "kind": "whatever" })), Event::Other(_)));
+        match Event::parse(&json!({ "kind": "conn", "id": 3, "what": "open", "peer": "192.168.1.20:51234" })) {
+            Event::Conn { id: 3, what: Conn::Open { peer } } => assert_eq!(peer, "192.168.1.20:51234"),
+            e => panic!("{e:?}"),
+        }
+        match Event::parse(&json!({ "kind": "conn", "id": 3, "what": "line", "text": "hi" })) {
+            Event::Conn { id: 3, what: Conn::Line(t) } => assert_eq!(t, "hi"),
+            e => panic!("{e:?}"),
+        }
+        assert!(matches!(Event::parse(&json!({ "kind": "conn", "id": 3, "what": "close" })), Event::Conn { id: 3, what: Conn::Close }));
+    }
+
+    #[test]
+    fn conn_and_mdns_doubles_check_like_the_runtime() {
+        let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        host::test::reset();
+        assert!(host::conn_send(1, "hi"));
+        assert!(!host::conn_send(1, "a\nb"), "行里不能有换行");
+        assert!(!host::conn_send(1, &"x".repeat(host::CONN_LINE_MAX + 1)), "太长");
+        assert_eq!(host::test::conn_sent(), vec![(1, "hi".to_string())]);
+        host::conn_close(1);
+        assert_eq!(host::test::conn_closed(), vec![1]);
+        assert!(host::mdns_set("小黄的掌机", &[("key", "abc")]));
+        assert!(!host::mdns_set("a.b", &[]), "实例名不能有点");
+        assert!(!host::mdns_set("", &[]));
+        assert_eq!(host::test::mdns().unwrap().0, "小黄的掌机");
+        assert_eq!(host::random(16).len(), 16);
+        assert_ne!(host::random(16), host::random(16));
     }
 
     #[test]

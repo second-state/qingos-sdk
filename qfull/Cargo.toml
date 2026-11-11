@@ -9,6 +9,10 @@ license = "MIT"
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# 装载器读清单（app.toml）里的 listen、mdns。
+toml = { version = "0.8", default-features = false, features = ["parse"] }
 # 设备上只带运行时，不带编译器。开发机上开 compile：直接跑 .wasm、给别的机器编 .cwasm。
 wasmtime = { version = "37", default-features = false, features = ["runtime", "std"] }
 
