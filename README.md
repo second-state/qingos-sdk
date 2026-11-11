@@ -13,12 +13,12 @@ The runtime runs it with wasmtime. This repository holds the libraries you need 
 
 The contract with the runtime is in [docs/ABI.md](docs/ABI.md) (in Chinese).
 
-To make games, use the [VibeGame SDK](https://github.com/longzhi/vibegame-sdk). It is built on these libraries and comes with a command line, a Skill and sample games.
+To make games, use the [VibeGame SDK](https://github.com/second-state/vibegame-sdk). It is built on these libraries and comes with a command line, a Skill and sample games.
 
 ## Who uses it
 
 - The QingOS runtime pins one commit of this repository as a git dependency.
-- The [VibeGame SDK](https://github.com/longzhi/vibegame-sdk) does the same.
+- The [VibeGame SDK](https://github.com/second-state/vibegame-sdk) does the same.
 
 When you change an interface here, update both of them.
 

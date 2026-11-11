@@ -8,7 +8,7 @@ version = "0.2.0"
 edition = "2021"
 publish = false
 license = "MIT"
-repository = "https://github.com/longzhi/qingos-sdk"
+repository = "https://github.com/second-state/qingos-sdk"
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
