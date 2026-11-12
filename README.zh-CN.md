@@ -13,12 +13,12 @@ QingOS 是一个基于 Linux 内核的 agentic 操作系统。QingOS 上的 app 
 
 和运行时的约定在 [docs/ABI.md](docs/ABI.md)。
 
-想做游戏，用 [VibeGame SDK](https://github.com/second-state/vibegame-sdk)：它建在这几个库上面，带命令行、Skill、样板游戏。
+想做游戏，用 [VibePlay SDK](https://github.com/second-state/vibeplay-sdk)：它建在这几个库上面，带命令行、Skill、样板游戏。
 
 ## 谁在用
 
 - QingOS 的运行时用 git 依赖钉这个仓库的一个提交。
-- [VibeGame SDK](https://github.com/second-state/vibegame-sdk) 也一样。
+- [VibePlay SDK](https://github.com/second-state/vibeplay-sdk) 也一样。
 
 改了这里的接口，要去这两处跟上。
 
