@@ -3,6 +3,9 @@
 //! 设备和开发机上的 `vibegame` 命令行用这同一份代码。app 这头的导入函数（`qing` 模块里）：
 //! - `frame(pixels, palette) -> i32`：交一帧。`pixels` 是 240×160 个字节，一个字节指向调色板的一格；
 //!   `palette` 是 256 格，每格 R G B 三个字节。系统在 `qing_tick` 之后取最新交的那一帧。0 是收了，-1 是地址不对。
+//! - `frame565(pixels) -> i32`：清单写了 `frame = "640x480"` 的 app 交一帧真彩画面（ADR 0036）。
+//!   `pixels` 是 640×480 个像素，一个像素两个字节，RGB565，高字节在前。系统不放大，放在屏中间。
+//!   0 是收了，-1 是清单没写或地址不对。写了的 app 调 `frame` 也回 -1：一个 app 只交一种画面。
 //! - `buttons() -> u32`：这一帧哪些键按着，位图见 [`key`]。
 //! - `tone(channel, hz, ms, volume) -> i32`：在声道 0–3 上发一个音调。`ms` 是 0 就停掉这个声道。
 //!   `volume` 是 0–100。0 是收了，-1 是声道不对。
@@ -14,7 +17,7 @@
 use std::sync::{Arc, Mutex};
 use wasmtime::{Caller, Linker};
 
-/// 逐帧画面的宽和高。放大 3 倍是 720×480。
+/// 调色板画面（[`Format::Indexed`]）的宽和高。放大 3 倍是 720×480。
 pub const W: usize = 240;
 pub const H: usize = 160;
 /// 一帧的像素有几个字节。
@@ -57,34 +60,119 @@ pub mod key {
     }
 }
 
-/// 一帧：像素和调色板。
+/// 整屏 app 交哪种画面：清单的 `frame`。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Format {
+    /// 240×160，一个像素是调色板的一格。系统整数倍放大（ADR 0030）。清单不写 `frame` 就是它。
+    #[default]
+    Indexed,
+    /// 640×480，一个像素两个字节，RGB565，高字节在前。系统不放大（ADR 0036）。清单写 `frame = "640x480"`。
+    Rgb565,
+}
+
+impl Format {
+    /// 清单的 `frame`：空的是 [`Format::Indexed`]，`"640x480"` 是 [`Format::Rgb565`]，别的不认。
+    pub fn parse(s: &str) -> Option<Format> {
+        match s {
+            "" => Some(Format::Indexed),
+            "640x480" => Some(Format::Rgb565),
+            _ => None,
+        }
+    }
+
+    /// 画面的宽和高。
+    pub fn size(self) -> (usize, usize) {
+        match self {
+            Format::Indexed => (W, H),
+            Format::Rgb565 => (640, 480),
+        }
+    }
+
+    /// 一帧的像素有几个字节。
+    pub fn bytes(self) -> usize {
+        let (w, h) = self.size();
+        match self {
+            Format::Indexed => w * h,
+            Format::Rgb565 => w * h * 2,
+        }
+    }
+
+    /// 一块 `dw`×`dh` 的屏放得下几倍、从哪里开始画。放不下一倍是 0。
+    /// 调色板的取最大的整数倍；RGB565 的不放大，放得下就是 1。
+    pub fn fit(self, dw: usize, dh: usize) -> (usize, usize, usize) {
+        let (w, h) = self.size();
+        let mut k = (dw / w).min(dh / h);
+        if self == Format::Rgb565 {
+            k = k.min(1);
+        }
+        (k, (dw - w * k) / 2, (dh - h * k) / 2)
+    }
+}
+
+/// 一个 RGB565 的点（高字节在前）换成 0x00RRGGBB。低位用高位补，白还是白。
+pub fn rgb565(hi: u8, lo: u8) -> u32 {
+    let v = (hi as u32) << 8 | lo as u32;
+    let (r, g, b) = (v >> 11, (v >> 5) & 0x3f, v & 0x1f);
+    (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2)
+}
+
+/// 一帧：像素，调色板的画面还有调色板。
 #[derive(Clone)]
 pub struct Frame {
+    pub format: Format,
     pub pixels: Vec<u8>,
+    /// 调色板的画面才有：256 格，每格 R G B。RGB565 的是空的。
     pub palette: Vec<u8>,
 }
 
 impl Default for Frame {
-    /// 还没交过画面：全黑。
+    /// 还没交过画面：240×160，全黑。
     fn default() -> Self {
-        Frame { pixels: vec![0; PIXELS], palette: vec![0; PALETTE] }
+        Frame::blank(Format::Indexed)
     }
 }
 
 impl Frame {
+    /// 还没交过画面：这种格式的一帧，全黑。
+    pub fn blank(format: Format) -> Frame {
+        let palette = if format == Format::Indexed { vec![0; PALETTE] } else { Vec::new() };
+        Frame { format, pixels: vec![0; format.bytes()], palette }
+    }
+
+    /// 宽和高。
+    pub fn size(&self) -> (usize, usize) {
+        self.format.size()
+    }
+
+    /// 一个点的颜色，0x00RRGGBB。
+    fn color(&self, x: usize, y: usize) -> u32 {
+        let w = self.format.size().0;
+        match self.format {
+            Format::Indexed => {
+                let i = self.pixels[y * w + x] as usize * 3;
+                (self.palette[i] as u32) << 16 | (self.palette[i + 1] as u32) << 8 | self.palette[i + 2] as u32
+            }
+            Format::Rgb565 => {
+                let i = (y * w + x) * 2;
+                rgb565(self.pixels[i], self.pixels[i + 1])
+            }
+        }
+    }
+
     /// 一个点的颜色。
     pub fn rgb(&self, x: usize, y: usize) -> [u8; 3] {
-        let i = self.pixels[y * W + x] as usize * 3;
-        [self.palette[i], self.palette[i + 1], self.palette[i + 2]]
+        let c = self.color(x, y);
+        [(c >> 16) as u8, (c >> 8) as u8, c as u8]
     }
 
     /// 放大 `k` 倍（最近邻）的 RGB 字节，一行接一行。截图用。
     pub fn rgb_scaled(&self, k: usize) -> Vec<u8> {
         let k = k.max(1);
-        let mut out = Vec::with_capacity(PIXELS * k * k * 3);
-        for y in 0..H {
+        let (w, h) = self.size();
+        let mut out = Vec::with_capacity(w * h * k * k * 3);
+        for y in 0..h {
             let row_start = out.len();
-            for x in 0..W {
+            for x in 0..w {
                 let c = self.rgb(x, y);
                 for _ in 0..k {
                     out.extend_from_slice(&c);
@@ -98,32 +186,41 @@ impl Frame {
         out
     }
 
-    /// 画到一块 `dw`×`dh` 的屏上（每个点 0x00RRGGBB）：取最大的整数倍，放在中间，四周黑边。
+    /// 画到一块 `dw`×`dh` 的屏上（每个点 0x00RRGGBB），放在中间，四周黑边。
+    /// 调色板的取最大的整数倍；RGB565 的不放大（[`Format::fit`]）。屏放不下就全黑。
     pub fn blit(&self, dst: &mut [u32], dw: usize, dh: usize) {
-        let (k, x0, y0) = fit(dw, dh);
+        let (k, x0, y0) = self.format.fit(dw, dh);
         dst.iter_mut().for_each(|p| *p = 0);
         if k == 0 {
             return;
         }
+        let (w, h) = self.size();
         let pal: Vec<u32> = self.palette.chunks(3).map(|c| (c[0] as u32) << 16 | (c[1] as u32) << 8 | c[2] as u32).collect();
-        for y in 0..H {
-            let src = &self.pixels[y * W..(y + 1) * W];
+        for y in 0..h {
             let top = (y0 + y * k) * dw + x0;
-            let line = &mut dst[top..top + W * k];
-            for (x, &p) in src.iter().enumerate() {
-                line[x * k..(x + 1) * k].fill(pal[p as usize]);
+            let line = &mut dst[top..top + w * k];
+            match self.format {
+                Format::Indexed => {
+                    for (x, &p) in self.pixels[y * w..(y + 1) * w].iter().enumerate() {
+                        line[x * k..(x + 1) * k].fill(pal[p as usize]);
+                    }
+                }
+                Format::Rgb565 => {
+                    for (x, c) in self.pixels[y * w * 2..(y + 1) * w * 2].as_chunks::<2>().0.iter().enumerate() {
+                        line[x * k..(x + 1) * k].fill(rgb565(c[0], c[1]));
+                    }
+                }
             }
             for r in 1..k {
-                dst.copy_within(top..top + W * k, top + r * dw);
+                dst.copy_within(top..top + w * k, top + r * dw);
             }
         }
     }
 }
 
-/// 一块 `dw`×`dh` 的屏放得下几倍、从哪里开始画。放不下一倍是 0。
+/// 240×160 的画面在一块 `dw`×`dh` 的屏上放得下几倍、从哪里开始画。放不下一倍是 0。
 pub fn fit(dw: usize, dh: usize) -> (usize, usize, usize) {
-    let k = (dw / W).min(dh / H);
-    (k, (dw - W * k) / 2, (dh - H * k) / 2)
+    Format::Indexed.fit(dw, dh)
 }
 
 /// app 发的一个音调。日志和测试看它。
@@ -298,6 +395,8 @@ fn parse_wav(b: &[u8]) -> Option<(Vec<i16>, u32)> {
 
 /// 一个 app 的整屏状态：app 的导入函数往里写，系统从里读。
 pub struct Full {
+    /// 清单的 `frame`：这个 app 交哪种画面。
+    format: Format,
     state: Mutex<State>,
     /// 停着：不在前台，或者系统层叠在上面。停着时定频的线程不调它。
     paused: std::sync::atomic::AtomicBool,
@@ -318,15 +417,32 @@ struct State {
 pub const RATE: u32 = 48_000;
 
 impl Default for Full {
+    /// 交 240×160 调色板画面的 app。
     fn default() -> Self {
-        Full {
-            state: Mutex::new(State { buttons: 0, frame: None, fresh: false, synth: Synth::new(RATE), tones: Vec::new() }),
-            paused: std::sync::atomic::AtomicBool::new(false),
-        }
+        Full::new(Format::Indexed)
     }
 }
 
 impl Full {
+    /// 交 `format` 这种画面的 app（清单的 `frame`，[`Format::parse`]）。
+    pub fn new(format: Format) -> Self {
+        Full {
+            format,
+            state: Mutex::new(State { buttons: 0, frame: None, fresh: false, synth: Synth::new(RATE), tones: Vec::new() }),
+            paused: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// 这个 app 交哪种画面。
+    pub fn format(&self) -> Format {
+        self.format
+    }
+
+    /// 还没交过画面时显示的：这种格式的一帧，全黑。
+    pub fn blank(&self) -> Frame {
+        Frame::blank(self.format)
+    }
+
     /// 停下或接着跑。停下时键都算没按，在响的声音停掉：系统层上来时游戏不该还在响。
     pub fn pause(&self, on: bool) {
         self.paused.store(on, std::sync::atomic::Ordering::SeqCst);
@@ -371,9 +487,11 @@ impl Full {
         f(&mut self.state.lock().unwrap().synth)
     }
 
+    /// 收一帧。`palette` 只有调色板的画面才有。
     fn put_frame(&self, pixels: &[u8], palette: &[u8]) {
         let mut s = self.state.lock().unwrap();
-        let f = s.frame.get_or_insert_with(Frame::default);
+        let format = self.format;
+        let f = s.frame.get_or_insert_with(|| Frame::blank(format));
         f.pixels.copy_from_slice(pixels);
         f.palette.copy_from_slice(palette);
         s.fresh = true;
@@ -407,7 +525,7 @@ pub fn set_lang(code: &str) {
     LANG.store(code.starts_with("zh") as u32, std::sync::atomic::Ordering::Relaxed);
 }
 
-/// 把五个导入函数接到 linker 上。`get` 从宿主的数据里拿这个 app 的 [`Full`]。
+/// 把整屏页的导入函数接到 linker 上（`frame`、`frame565`、`buttons`、`tone`、`tone_wav`、`lang`）。`get` 从宿主的数据里拿这个 app 的 [`Full`]。
 pub fn link<T: 'static>(linker: &mut Linker<T>, get: fn(&T) -> &Arc<Full>) -> anyhow::Result<()> {
     fn mem<T>(c: &mut Caller<'_, T>) -> Option<wasmtime::Memory> {
         c.get_export("memory").and_then(|e| e.into_memory())
@@ -417,7 +535,22 @@ pub fn link<T: 'static>(linker: &mut Linker<T>, get: fn(&T) -> &Arc<Full>) -> an
         let (data, host) = m.data_and_store_mut(&mut c);
         let (px, pal) = (px as usize, pal as usize);
         let (Some(p), Some(q)) = (data.get(px..px + PIXELS), data.get(pal..pal + PALETTE)) else { return -1 };
-        get(host).put_frame(p, q);
+        let full = get(host);
+        if full.format != Format::Indexed {
+            return -1;
+        }
+        full.put_frame(p, q);
+        0
+    })?;
+    linker.func_wrap("qing", "frame565", move |mut c: Caller<'_, T>, px: u32| -> i32 {
+        let Some(m) = mem(&mut c) else { return -1 };
+        let (data, host) = m.data_and_store_mut(&mut c);
+        let full = get(host);
+        if full.format != Format::Rgb565 {
+            return -1;
+        }
+        let Some(p) = data.get(px as usize..px as usize + Format::Rgb565.bytes()) else { return -1 };
+        full.put_frame(p, &[]);
         0
     })?;
     linker.func_wrap("qing", "buttons", move |c: Caller<'_, T>| -> u32 { get(c.data()).state.lock().unwrap().buttons })?;
@@ -505,6 +638,58 @@ mod tests {
         assert_eq!(rgb.len(), 720 * 480 * 3);
         assert_eq!(&rgb[(2 * 720 + 2) * 3..(2 * 720 + 2) * 3 + 3], &[0xff, 0x80, 0x01]);
         assert_eq!(&rgb[3 * 3..3 * 3 + 3], &[0, 0, 0]);
+    }
+
+    /// RGB565 的画面：不放大，放在中间，四周黑边；颜色按高字节在前读。屏放不下就全黑。
+    #[test]
+    fn rgb565_is_centred_unscaled_with_black_borders() {
+        assert_eq!(rgb565(0xff, 0xff), 0xffffff);
+        assert_eq!(rgb565(0xf8, 0x00), 0xff0000);
+        assert_eq!(rgb565(0x07, 0xe0), 0x00ff00);
+        assert_eq!(rgb565(0x00, 0x1f), 0x0000ff);
+        assert_eq!(Format::parse("640x480"), Some(Format::Rgb565));
+        assert_eq!(Format::parse(""), Some(Format::Indexed));
+        assert_eq!(Format::parse("320x240"), None);
+        let mut f = Frame::blank(Format::Rgb565);
+        assert_eq!(f.pixels.len(), 640 * 480 * 2);
+        assert!(f.palette.is_empty());
+        f.pixels[..2].copy_from_slice(&[0xf8, 0x00]); // 左上角红
+        let last = (640 * 480 - 1) * 2;
+        f.pixels[last..].copy_from_slice(&[0x00, 0x1f]); // 右下角蓝
+        // 720×480：左右各 40 的黑边，上下没有。
+        assert_eq!(Format::Rgb565.fit(720, 480), (1, 40, 0));
+        let mut dst = vec![7u32; 720 * 480];
+        f.blit(&mut dst, 720, 480);
+        assert_eq!(dst[40], 0xff0000);
+        assert_eq!(dst[39], 0, "左边黑边");
+        assert_eq!(dst[41], 0, "不放大：旁边一个点是下一个像素");
+        assert_eq!(dst[479 * 720 + 40 + 639], 0x0000ff);
+        assert_eq!(dst[479 * 720 + 40 + 640], 0, "右边黑边");
+        // 1280×960 也不放大：放在中间。
+        assert_eq!(Format::Rgb565.fit(1280, 960), (1, 320, 240));
+        // 比 640×480 小的屏：放不下，全黑。
+        assert_eq!(Format::Rgb565.fit(480, 320).0, 0);
+        let mut small = vec![7u32; 480 * 320];
+        f.blit(&mut small, 480, 320);
+        assert!(small.iter().all(|p| *p == 0));
+        // 截图：640×480，不放大。
+        let rgb = f.rgb_scaled(1);
+        assert_eq!(rgb.len(), 640 * 480 * 3);
+        assert_eq!(&rgb[..3], &[0xff, 0, 0]);
+    }
+
+    /// 一个 app 只交一种画面：`frame565` 只收写了 `frame = "640x480"` 的，`frame` 只收没写的。
+    #[test]
+    fn each_app_takes_one_kind_of_frame() {
+        let f = Full::new(Format::Rgb565);
+        assert_eq!(f.format(), Format::Rgb565);
+        assert_eq!(f.blank().pixels.len(), 640 * 480 * 2);
+        f.put_frame(&vec![0xab; 640 * 480 * 2], &[]);
+        let got = f.take_frame().unwrap();
+        assert_eq!(got.format, Format::Rgb565);
+        assert_eq!(got.pixels[0], 0xab);
+        assert!(f.take_frame().is_none(), "不交就不重画");
+        assert!(f.last_frame().is_some(), "系统一直有最后交的那一帧");
     }
 
     #[test]

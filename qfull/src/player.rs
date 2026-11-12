@@ -1,7 +1,7 @@
 //! 只跑整屏 app 的装载器：开发机上的命令行用它在窗口里、不开窗口、截图时跑一个游戏。
 //!
 //! 只接整屏 app 用得到的导入函数（`docs/ABI.md`「整屏 app」那一组）：
-//! 整屏页的 `frame`、`buttons`、`tone`、`tone_wav`，加 `log`、`data_*`、`asset_read`、`now`、`tz_offset`。
+//! 整屏页的 `frame`、`frame565`（清单写了 `frame = "640x480"`）、`buttons`、`tone`、`tone_wav`，加 `log`、`data_*`、`asset_read`、`now`、`tz_offset`。
 //! 清单写了 `listen`，照样开端口、收连接（[`crate::listen`]），加 `conn_send`、`conn_close`、`mdns_set`、`random`。
 //! 端口用 `QING_LISTEN_PORT` 换，几个仿真互不串。mDNS 在开发机上只记日志，不发。连接上的事在每一帧开头交给 app。
 //! 别的导入函数（联网、推卡……）调了就出错：整屏 app 不该用它们。
@@ -57,6 +57,9 @@ struct ManifestApp {
     listen: u16,
     #[serde(default)]
     mdns: String,
+    /// 交哪种画面：空的是 240×160，`"640x480"` 是真彩（ADR 0036）。
+    #[serde(default)]
+    frame: String,
 }
 
 /// 一个跑着的整屏 app。
@@ -219,7 +222,6 @@ impl Player {
         // 别的导入函数：装得上，调了就出错。
         linker.define_unknown_imports_as_traps(&module)?;
 
-        let full = Arc::new(Full::default());
         let dir = path.ancestors().skip(1).find(|d| d.join("app.toml").is_file());
         let assets = dir.map(|d| d.join("assets"));
         let manifest: Manifest = match dir {
@@ -230,6 +232,8 @@ impl Player {
             }
             None => Manifest::default(),
         };
+        let format = full::Format::parse(&manifest.app.frame).with_context(|| format!("清单的 frame 写的是「{}」，只认 640x480", manifest.app.frame))?;
+        let full = Arc::new(Full::new(format));
         let events: Arc<Mutex<VecDeque<serde_json::Value>>> = Arc::default();
         let port = std::env::var("QING_LISTEN_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(manifest.app.listen);
         let listen = (manifest.app.listen != 0).then(|| {

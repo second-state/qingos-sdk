@@ -58,6 +58,7 @@ mod ffi {
     #[link(wasm_import_module = "qing")]
     extern "C" {
         pub fn frame(pixels: u32, palette: u32) -> i32;
+        pub fn frame565(pixels: u32) -> i32;
         pub fn buttons() -> u32;
         pub fn tone(channel: u32, hz: u32, ms: u32, volume: u32) -> i32;
         pub fn tone_wav(ptr: u32, len: u32) -> i32;
@@ -150,6 +151,44 @@ impl Frame {
         #[cfg(target_arch = "wasm32")]
         unsafe {
             ffi::frame(self.pixels.as_ptr() as u32, self.palette.as_ptr() as u32) == 0
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            native::FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            true
+        }
+    }
+}
+
+/// 一帧真彩画面：640×480 个像素，一个像素两个字节，RGB565，高字节在前（docs/adr/0036）。
+/// 清单要写 `frame = "640x480"`。系统不放大，放在屏中间，四周涂黑。
+/// 系统一直显示最后交的那一帧：画面没变就不用交。
+pub struct Frame565 {
+    pub pixels: Vec<u8>,
+}
+
+impl Frame565 {
+    /// 宽和高。
+    pub const W: usize = 640;
+    pub const H: usize = 480;
+}
+
+impl Default for Frame565 {
+    /// 全黑。
+    fn default() -> Self {
+        Frame565 { pixels: vec![0; Self::W * Self::H * 2] }
+    }
+}
+
+impl Frame565 {
+    /// 把这一帧交给系统。清单没写 `frame = "640x480"`、像素不够一帧回 false。
+    pub fn show(&self) -> bool {
+        if self.pixels.len() < Self::W * Self::H * 2 {
+            return false;
+        }
+        #[cfg(target_arch = "wasm32")]
+        unsafe {
+            ffi::frame565(self.pixels.as_ptr() as u32) == 0
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -287,5 +326,13 @@ mod tests {
         f.rect(250, 159, 10, 1, 9);
         assert_eq!(f.get(-1, 0), None);
         assert!(!f.pixels.contains(&9));
+    }
+
+    #[test]
+    fn frame565_is_640x480_two_bytes_a_pixel() {
+        let f = Frame565::default();
+        assert_eq!(f.pixels.len(), 640 * 480 * 2);
+        assert!(f.show());
+        assert!(!Frame565 { pixels: vec![0; 10] }.show(), "不够一帧不交");
     }
 }
