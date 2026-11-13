@@ -18,7 +18,7 @@
 //!
 //! 和运行时之间的约定（ABI）在 `docs/APP.md`「和运行时的约定」一节：模块导出 `qing_alloc / qing_free / qing_call / qinit`，
 //! 导入 `qing.log / push / data_read / data_write / data_list / data_delete / now / tz_offset / http / http_start / setting / name / after`，
-//! 局域网上等连的 `conn_send / conn_close / mdns_set`，和 `random`。
+//! 局域网上等连的 `conn_send / conn_close / mdns_set`，`random`，和不在前台时叫人的 `call_person`。
 //! 整屏页的 `frame / buttons / tone / tone_wav` 在 [`full`] 里。
 //! 来回都是 JSON 字节。
 
@@ -352,6 +352,7 @@ pub mod host {
             pub fn conn_close(id: u64);
             pub fn mdns_set(ptr: u32, len: u32) -> i32;
             pub fn random(len: u32) -> u64;
+            pub fn call_person(ptr: u32, len: u32) -> i32;
         }
     }
 
@@ -806,6 +807,26 @@ pub mod host {
         }
     }
 
+    /// 不在前台时叫人（清单写了 `background`，QingOS ADR 0042）：系统停下前台的游戏，叠一层写着这句话。
+    /// `text` 是英文，`text_zh` 是中文，界面是哪种语言用哪种；中文空着用英文。最多 60 个字，多的截掉。
+    /// 30 秒里最多叫一次。没写 `background`、叫得太勤、text 是空的回 false。合着盖时系统不叫，也回 false。
+    pub fn call_person(text: &str, text_zh: &str) -> bool {
+        let req = json!({ "text": text, "text_zh": text_zh }).to_string();
+        #[cfg(target_arch = "wasm32")]
+        unsafe {
+            ffi::call_person(req.as_ptr() as u32, req.len() as u32) == 0
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = req;
+            if text.trim().is_empty() {
+                return false;
+            }
+            native::CALLED.lock().unwrap().push((text.to_string(), text_zh.to_string()));
+            true
+        }
+    }
+
     /// `n` 个随机字节，从系统的随机源来（做钥匙、配对码用）。最多 4096 个。
     pub fn random(n: usize) -> Vec<u8> {
         let n = n.min(4096);
@@ -992,6 +1013,8 @@ pub mod host {
         pub static CONN_SENT: Mutex<Vec<(u64, String)>> = Mutex::new(Vec::new());
         /// app 调过的 `conn_close`。
         pub static CONN_CLOSED: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+        /// app 调过的 `call_person`：英文、中文。
+        pub static CALLED: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
         /// `mdns_set` 给的实例名和 TXT。
         pub static MDNS: Mutex<Option<super::Mdns>> = Mutex::new(None);
     }
@@ -1138,6 +1161,11 @@ pub mod host {
             std::mem::take(&mut *native::CONN_SENT.lock().unwrap())
         }
 
+        /// app 调过的 `call_person`（英文、中文），按顺序。取走。
+        pub fn called() -> Vec<(String, String)> {
+            std::mem::take(&mut *native::CALLED.lock().unwrap())
+        }
+
         /// app 调过的 `conn_close`，按顺序。取走。
         pub fn conn_closed() -> Vec<u64> {
             std::mem::take(&mut *native::CONN_CLOSED.lock().unwrap())
@@ -1172,6 +1200,7 @@ pub mod host {
             native::LAN_IN.lock().unwrap().clear();
             native::CONN_SENT.lock().unwrap().clear();
             native::CONN_CLOSED.lock().unwrap().clear();
+            native::CALLED.lock().unwrap().clear();
             *native::MDNS.lock().unwrap() = None;
         }
     }
