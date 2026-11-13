@@ -2,7 +2,7 @@
 
 English · [中文](README.zh-CN.md)
 
-QingOS is an agentic operating system built on the Linux kernel. An app on QingOS is a wasm module plus a manifest, `app.toml`.
+[QingOS](https://qingos.korekore.ai/) is an agentic operating system built on the Linux kernel. An app on QingOS is a wasm module plus a manifest, `app.toml`.
 The runtime runs it with wasmtime. This repository holds the libraries you need to write apps:
 
 | Library | What it does |

@@ -2,7 +2,7 @@
 
 [English](README.md) · 中文
 
-QingOS 是一个基于 Linux 内核的 agentic 操作系统。QingOS 上的 app 是一个 wasm 模块加一份清单 `app.toml`，
+[QingOS](https://qingos.korekore.ai/zh/) 是一个基于 Linux 内核的 agentic 操作系统。QingOS 上的 app 是一个 wasm 模块加一份清单 `app.toml`，
 运行时用 wasmtime 跑它。这个仓库是写 app 要用的几个库：
 
 | 库 | 做什么 |
