@@ -353,3 +353,32 @@ mod tests {
         assert_eq!(l.conns(), 0);
     }
 }
+
+/// 叫一次人最多几个字（QingOS ADR 0042）。多的截掉。
+pub const CALL_TEXT_MAX: usize = 60;
+
+/// `call_person` 的参数：`{text, text_zh}`。text 不能空。回 (英文, 中文)，中文没写用英文；都截到 [`CALL_TEXT_MAX`] 个字。
+pub fn parse_call_person(req: &[u8]) -> Option<(String, String)> {
+    let v: serde_json::Value = serde_json::from_slice(req).ok()?;
+    let cut = |s: &str| s.trim().chars().filter(|c| !c.is_control()).take(CALL_TEXT_MAX).collect::<String>();
+    let en = cut(v["text"].as_str()?);
+    if en.is_empty() {
+        return None;
+    }
+    let zh = v["text_zh"].as_str().map(cut).filter(|z| !z.is_empty()).unwrap_or_else(|| en.clone());
+    Some((en, zh))
+}
+
+#[cfg(test)]
+mod call_tests {
+    use super::*;
+
+    #[test]
+    fn call_person_text_is_cut_and_falls_back_to_english() {
+        assert_eq!(parse_call_person(br#"{"text":"Claude needs you"}"#), Some(("Claude needs you".into(), "Claude needs you".into())));
+        assert_eq!(parse_call_person("{\"text\":\"a\",\"text_zh\":\"要你\"}".as_bytes()).unwrap().1, "要你");
+        assert_eq!(parse_call_person(format!(r#"{{"text":"{}"}}"#, "x".repeat(99)).as_bytes()).unwrap().0.len(), CALL_TEXT_MAX);
+        assert!(parse_call_person(br#"{"text":"  "}"#).is_none());
+        assert!(parse_call_person(b"nope").is_none());
+    }
+}

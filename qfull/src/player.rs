@@ -32,6 +32,8 @@ struct Host {
     port: u16,
     /// app 调过 `mdns_set` 了。
     mdns_set: bool,
+    /// 清单写了 `background`（QingOS ADR 0042）：能用 `call_person` 叫人。
+    background: bool,
 }
 
 /// 交事件要的导出：内存、`qing_alloc`、`qing_free`、`qing_call`。
@@ -57,6 +59,9 @@ struct ManifestApp {
     listen: u16,
     #[serde(default)]
     mdns: String,
+    /// 不在前台也收连接，能叫人（QingOS ADR 0042）。
+    #[serde(default)]
+    background: bool,
     /// 交哪种画面：空的是 240×160，`"640x480"` 是真彩（ADR 0036）。
     #[serde(default)]
     frame: String,
@@ -212,6 +217,18 @@ impl Player {
             eprintln!("[mdns] 会回 {}：实例「{instance}」，端口 {}，TXT {} 项（开发机上不发）", h.mdns, h.port, txt.len());
             0
         })?;
+        // 叫人（QingOS ADR 0042）。开发机上没有别的游戏可停：打一行，回 0。
+        linker.func_wrap("qing", "call_person", |mut c: Caller<'_, Host>, p: u32, n: u32| -> i32 {
+            let Some(m) = mem(&mut c) else { return -1 };
+            let req = bytes(&m, &c, p, n);
+            let h = c.data();
+            if !h.background || h.listen.is_none() {
+                return -1;
+            }
+            let Some((text, _)) = crate::listen::parse_call_person(&req) else { return -1 };
+            eprintln!("[call] 叫人：{text}（设备上会停下前台的游戏，叠一层）");
+            0
+        })?;
         linker.func_wrap("qing", "random", |mut c: Caller<'_, Host>, n: u32| -> u64 {
             let Some(m) = mem(&mut c) else { return 0 };
             let b = crate::listen::random(n as usize);
@@ -241,7 +258,7 @@ impl Player {
             Arc::new(Listener::new(&manifest.app.name, port, Arc::new(move |v| q.lock().unwrap().push_back(v))))
         });
         let limits = StoreLimitsBuilder::new().memory_size((memory_mb.max(1) as usize) << 20).instances(1).build();
-        let mut store = Store::new(engine, Host { full: full.clone(), data, assets, limits, listen: listen.clone(), mdns: manifest.app.mdns.clone(), port, mdns_set: false });
+        let mut store = Store::new(engine, Host { full: full.clone(), data, assets, limits, listen: listen.clone(), mdns: manifest.app.mdns.clone(), port, mdns_set: false, background: manifest.app.background });
         store.limiter(|h| &mut h.limits);
         store.set_epoch_deadline(30);
         let inst = linker.instantiate(&mut store, &module).with_context(|| format!("{} 起不来", path.display()))?;
