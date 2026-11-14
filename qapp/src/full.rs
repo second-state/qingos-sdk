@@ -217,7 +217,7 @@ pub fn tone(ch: Channel, hz: u32, ms: u32, volume: u32) -> bool {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        native::TONES.lock().unwrap().push((ch as u32, hz, ms, volume));
+        native::TONES.with(|t| t.borrow_mut().push((ch as u32, hz, ms, volume)));
         true
     }
 }
@@ -271,14 +271,18 @@ pub fn lang() -> Lang {
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native {
     use std::sync::atomic::{AtomicU32, AtomicU64};
-    use std::sync::Mutex;
     pub static KEYS: AtomicU32 = AtomicU32::new(0);
     pub static FRAMES: AtomicU64 = AtomicU64::new(0);
-    /// 声道、频率、毫秒、音量。
-    pub static TONES: Mutex<Vec<(u32, u32, u32, u32)>> = Mutex::new(Vec::new());
     thread_local! {
+        /// 发过的音调：声道、频率、毫秒、音量。一个线程一份，测试各看各的。用 [`take_tones`] 取。
+        pub static TONES: std::cell::RefCell<Vec<(u32, u32, u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
         /// 这个线程上 [`super::lang`] 回什么：0 英文，1 中文。测试各自设，互不影响。
         pub static LANG: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// 取出这个线程发过的音调，取完清空。
+    pub fn take_tones() -> Vec<(u32, u32, u32, u32)> {
+        TONES.with(|t| std::mem::take(&mut *t.borrow_mut()))
     }
 
     /// 测试里换语言：只换这个线程的。

@@ -445,7 +445,7 @@ pub mod host {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            native::DATA.lock().unwrap().get(key).cloned()
+            native::DATA.with(|d| d.borrow().get(key).cloned())
         }
     }
 
@@ -472,7 +472,7 @@ pub mod host {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            native::DATA.lock().unwrap().insert(key.to_string(), value.to_vec());
+            native::DATA.with(|d| d.borrow_mut().insert(key.to_string(), value.to_vec()));
             Ok(())
         }
     }
@@ -485,7 +485,7 @@ pub mod host {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut v: Vec<String> = native::DATA.lock().unwrap().keys().cloned().collect();
+            let mut v: Vec<String> = native::DATA.with(|d| d.borrow().keys().cloned().collect());
             v.sort();
             v
         }
@@ -502,7 +502,7 @@ pub mod host {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            native::DATA.lock().unwrap().remove(key);
+            native::DATA.with(|d| d.borrow_mut().remove(key));
             Ok(())
         }
     }
@@ -983,7 +983,10 @@ pub mod host {
         use std::sync::atomic::AtomicU64;
         use std::sync::{LazyLock, Mutex};
         pub type HttpFn = Box<dyn Fn(&Value) -> Result<Response> + Send>;
-        pub static DATA: LazyLock<Mutex<HashMap<String, Vec<u8>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+        thread_local! {
+            /// 存下的数据。一个线程一份：`cargo test` 一起跑的测试不会互相读到存档。
+            pub static DATA: std::cell::RefCell<HashMap<String, Vec<u8>>> = std::cell::RefCell::new(HashMap::new());
+        }
         pub static ASSETS: LazyLock<Mutex<HashMap<String, Vec<u8>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
         pub static HTTP: Mutex<Option<HttpFn>> = Mutex::new(None);
         pub static EVENTS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
@@ -1183,7 +1186,7 @@ pub mod host {
 
         /// 清空内存里的数据（一个测试一个干净的开始）。
         pub fn reset() {
-            native::DATA.lock().unwrap().clear();
+            native::DATA.with(|d| d.borrow_mut().clear());
             native::EVENTS.lock().unwrap().clear();
             native::PAGES.lock().unwrap().clear();
             *native::HTTP.lock().unwrap() = None;

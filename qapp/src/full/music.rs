@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     fn plays_on_the_beat_loops_and_yields_to_sfx() {
-        TONES.lock().unwrap().clear();
+        TONES.with(|t| t.borrow_mut().clear());
         let t = Track::parse(Channel::Triangle, 30, "C4 r E4:2").unwrap();
         assert_eq!(t.steps(), 4);
         let mut m = Music::default();
@@ -204,13 +204,13 @@ mod tests {
         for _ in 0..40 {
             m.tick();
         }
-        let tones: Vec<_> = TONES.lock().unwrap().drain(..).filter(|t| t.1 != 0).collect();
+        let tones: Vec<_> = crate::full::native::take_tones().into_iter().filter(|t| t.1 != 0).collect();
         // 第 0 帧 C4，第 20 帧 E4（两格，333 毫秒的 7/8）。
         assert_eq!(tones, [(2, 262, 146, 30), (2, 330, 292, 30)]);
         // 又从头：音效占着三角波时，音乐不发。
         m.sfx(Channel::Triangle, 1000, 100, 50);
         m.tick();
-        let tones: Vec<_> = TONES.lock().unwrap().drain(..).collect();
+        let tones: Vec<_> = crate::full::native::take_tones().into_iter().collect();
         assert_eq!(tones, [(2, 1000, 100, 50)]);
         m.play(Song::new(1, false, vec![Track::parse(Channel::Square1, 10, "C5").unwrap()]));
         m.tick();
