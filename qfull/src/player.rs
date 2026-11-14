@@ -34,6 +34,8 @@ struct Host {
     mdns_set: bool,
     /// 清单写了 `background`（QingOS ADR 0042）：能用 `call_person` 叫人。
     background: bool,
+    /// 定住的钟：开始的 Unix 秒、时区偏移（秒）、跑过几帧。None 是用开发机的钟。
+    clock: Option<(i64, i32, u64)>,
 }
 
 /// 交事件要的导出：内存、`qing_alloc`、`qing_free`、`qing_call`。
@@ -234,8 +236,19 @@ impl Player {
             let b = crate::listen::random(n as usize);
             give(&mut c, &m, &b)
         })?;
-        linker.func_wrap("qing", "now", |_: Caller<'_, Host>| -> i64 { chrono::Local::now().timestamp() })?;
-        linker.func_wrap("qing", "tz_offset", |_: Caller<'_, Host>| -> i32 { chrono::Local::now().offset().local_minus_utc() })?;
+        // 定了钟就按帧走（每秒 60 帧），同样的按键每次跑出来一样；没定用开发机的钟。
+        linker.func_wrap("qing", "now", |c: Caller<'_, Host>| -> i64 {
+            match c.data().clock {
+                Some((start, _, frames)) => start + (frames / 60) as i64,
+                None => chrono::Local::now().timestamp(),
+            }
+        })?;
+        linker.func_wrap("qing", "tz_offset", |c: Caller<'_, Host>| -> i32 {
+            match c.data().clock {
+                Some((_, tz, _)) => tz,
+                None => chrono::Local::now().offset().local_minus_utc(),
+            }
+        })?;
         // 别的导入函数：装得上，调了就出错。
         linker.define_unknown_imports_as_traps(&module)?;
 
@@ -258,7 +271,7 @@ impl Player {
             Arc::new(Listener::new(&manifest.app.name, port, Arc::new(move |v| q.lock().unwrap().push_back(v))))
         });
         let limits = StoreLimitsBuilder::new().memory_size((memory_mb.max(1) as usize) << 20).instances(1).build();
-        let mut store = Store::new(engine, Host { full: full.clone(), data, assets, limits, listen: listen.clone(), mdns: manifest.app.mdns.clone(), port, mdns_set: false, background: manifest.app.background });
+        let mut store = Store::new(engine, Host { full: full.clone(), data, assets, limits, listen: listen.clone(), mdns: manifest.app.mdns.clone(), port, mdns_set: false, background: manifest.app.background, clock: None });
         store.limiter(|h| &mut h.limits);
         store.set_epoch_deadline(30);
         let inst = linker.instantiate(&mut store, &module).with_context(|| format!("{} 起不来", path.display()))?;
@@ -311,7 +324,16 @@ impl Player {
         }
         self.full.set_buttons(buttons);
         self.store.set_epoch_deadline(TICK_DEADLINE_SECS);
-        self.tick.call(&mut self.store, ()).map_err(|e| anyhow!("app 在这一帧出错：{e:#}"))
+        let r = self.tick.call(&mut self.store, ()).map_err(|e| anyhow!("app 在这一帧出错：{e:#}"));
+        if let Some(c) = &mut self.store.data_mut().clock {
+            c.2 += 1;
+        }
+        r
+    }
+
+    /// 把钟定在 `start`（Unix 秒），时区偏移 `tz` 秒。以后每跑 60 帧走一秒：截图和测试才稳。
+    pub fn set_clock(&mut self, start: i64, tz: i32) {
+        self.store.data_mut().clock = Some((start, tz, 0));
     }
 
     /// 整屏的状态：取画面、取音调、要声音的样本。
