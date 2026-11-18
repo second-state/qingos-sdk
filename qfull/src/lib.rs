@@ -27,5 +27,5 @@ pub fn precompile(wasm: &[u8], target: Option<&str>) -> anyhow::Result<Vec<u8>> 
     if let Some(t) = target {
         cfg.target(t)?;
     }
-    wasmtime::Engine::new(&cfg)?.precompile_module(wasm)
+    Ok(wasmtime::Engine::new(&cfg)?.precompile_module(wasm)?)
 }

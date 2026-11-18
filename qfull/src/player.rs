@@ -86,7 +86,7 @@ fn engine() -> Result<&'static Engine> {
     if let Some(e) = ENGINE.get() {
         return Ok(e);
     }
-    let e = Engine::new(&crate::config()).context("起不来 wasm 引擎")?;
+    let e = Engine::new(&crate::config()).map_err(anyhow::Error::from).context("起不来 wasm 引擎")?;
     if ENGINE.set(e).is_ok() {
         let e = ENGINE.get().unwrap();
         std::thread::Builder::new()
@@ -134,11 +134,11 @@ impl Player {
         let engine = engine()?;
         let module = if path.extension().is_some_and(|e| e == "cwasm") {
             // SAFETY: `.cwasm` 是同一份配置编的；版本对不上 wasmtime 会拒绝，不会乱跑。
-            unsafe { Module::deserialize_file(engine, path) }.with_context(|| format!("读不了 {}（是别的版本编的就重新编）", path.display()))?
+            unsafe { Module::deserialize_file(engine, path) }.map_err(anyhow::Error::from).with_context(|| format!("读不了 {}（是别的版本编的就重新编）", path.display()))?
         } else {
             #[cfg(feature = "compile")]
             {
-                Module::from_file(engine, path).with_context(|| format!("编不了 {}", path.display()))?
+                Module::from_file(engine, path).map_err(anyhow::Error::from).with_context(|| format!("编不了 {}", path.display()))?
             }
             #[cfg(not(feature = "compile"))]
             anyhow::bail!("{}：这里只认编好的 .cwasm", path.display())
@@ -274,11 +274,11 @@ impl Player {
         let mut store = Store::new(engine, Host { full: full.clone(), data, assets, limits, listen: listen.clone(), mdns: manifest.app.mdns.clone(), port, mdns_set: false, background: manifest.app.background, clock: None });
         store.limiter(|h| &mut h.limits);
         store.set_epoch_deadline(30);
-        let inst = linker.instantiate(&mut store, &module).with_context(|| format!("{} 起不来", path.display()))?;
+        let inst = linker.instantiate(&mut store, &module).map_err(anyhow::Error::from).with_context(|| format!("{} 起不来", path.display()))?;
         if let Ok(init) = inst.get_typed_func::<(), ()>(&mut store, "qinit") {
             init.call(&mut store, ()).map_err(|e| anyhow!("qinit 出错：{e:#}"))?;
         }
-        let tick = inst.get_typed_func::<(), ()>(&mut store, "qing_tick").context("没有导出 qing_tick：不是整屏 app")?;
+        let tick = inst.get_typed_func::<(), ()>(&mut store, "qing_tick").map_err(anyhow::Error::from).context("没有导出 qing_tick：不是整屏 app")?;
         let call = (|| {
             Some(Calls {
                 memory: inst.get_memory(&mut store, "memory")?,
