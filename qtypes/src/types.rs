@@ -206,13 +206,24 @@ impl ToolSpec {
                 Some((k, d)) => (k, Some(d)),
                 None => (&rest[start + 1..start + end], None),
             };
-            match &args[key] {
-                serde_json::Value::String(s) if !s.trim().is_empty() => out.push_str(s),
-                serde_json::Value::String(_) | serde_json::Value::Null => match default {
-                    Some(d) => out.push_str(d),
-                    None => out.push_str(&format!("{{{key}}}")),
-                },
-                other => out.push_str(&other.to_string()),
+            // 数组念成「P1、P3」：这句话是人按确认键以前听到的，不能念 JSON。
+            let filled = match &args[key] {
+                serde_json::Value::String(s) => s.trim().to_string(),
+                serde_json::Value::Null => String::new(),
+                serde_json::Value::Array(items) => items
+                    .iter()
+                    .map(|v| match v {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("、"),
+                other => other.to_string(),
+            };
+            match (filled.is_empty(), default) {
+                (false, _) => out.push_str(&filled),
+                (true, Some(d)) => out.push_str(d),
+                (true, None) => out.push_str(&format!("{{{key}}}")),
             }
             rest = &rest[start + end + 1..];
         }
@@ -305,5 +316,38 @@ impl Place {
             }
         }
         parts.join(" · ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn spec(t: &str) -> ToolSpec {
+        ToolSpec::new("photos.delete", "删照片", json!({})).preview(t)
+    }
+
+    #[test]
+    fn preview_joins_string_arrays() {
+        // 模型照 schema 传数组：确认句要念「P1、P3」，不能念 JSON。
+        let s = spec("删掉照片 {photos}");
+        assert_eq!(s.render_preview(&json!({"photos": ["P1"]})), "删掉照片 P1");
+        assert_eq!(s.render_preview(&json!({"photos": ["P1", "P3"]})), "删掉照片 P1、P3");
+        // 意图句式传的是字符串：照旧。
+        assert_eq!(s.render_preview(&json!({"photos": "P1"})), "删掉照片 P1");
+    }
+
+    #[test]
+    fn preview_empty_array_uses_default() {
+        let s = spec("删掉照片 {photos|选中的照片}");
+        assert_eq!(s.render_preview(&json!({"photos": []})), "删掉照片 选中的照片");
+        assert_eq!(spec("删掉 {photos}").render_preview(&json!({"photos": []})), "删掉 {photos}");
+    }
+
+    #[test]
+    fn preview_numbers_and_mixed_arrays() {
+        let s = spec("买 {n} 个 {items}");
+        assert_eq!(s.render_preview(&json!({"n": 2, "items": ["苹果", 3]})), "买 2 个 苹果、3");
     }
 }
